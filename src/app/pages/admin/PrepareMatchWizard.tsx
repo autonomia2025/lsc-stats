@@ -28,13 +28,13 @@ export default function PrepareMatchWizard() {
         const awayPlayers = data.awayTeam.activePlayers.map((p: any) => ({ ...p, id: p.id.toString() }));
         
         setLocalTeam({
-          name: data.homeTeam.name,
-          short: data.homeTeam.name.substring(0, 2).toUpperCase(),
+          name: data.homeTeam?.name || 'Local',
+          short: data.homeTeam?.name?.substring(0, 2).toUpperCase() || 'LO',
           players: homePlayers
         });
         setVisitorTeam({
-          name: data.awayTeam.name,
-          short: data.awayTeam.name.substring(0, 2).toUpperCase(),
+          name: data.awayTeam?.name || 'Visitante',
+          short: data.awayTeam?.name?.substring(0, 2).toUpperCase() || 'VI',
           players: awayPlayers
         });
 
@@ -73,7 +73,7 @@ export default function PrepareMatchWizard() {
               visitorSelected
            })
         });
-        navigate(`/admin/mesa/${id}`);
+        navigate(`/admin`);
      } catch(e) {
         console.error(e);
      }

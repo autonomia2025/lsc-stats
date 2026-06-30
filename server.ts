@@ -1,8 +1,8 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { db } from "./src/db/index.js";
-import { leagues, seasons, teams } from "./src/db/schema.js";
+import { db } from "./src/db/index";
+import { leagues, seasons, teams } from "./src/db/schema";
 import { eq } from "drizzle-orm";
 
 async function startServer() {
@@ -40,7 +40,7 @@ async function startServer() {
       const allTeams = await db.select().from(teams);
 
       // Find a match to prepare
-      const { matches, players, matchRosters, matchEvents } = await import('./src/db/schema.js');
+      const { matches, players, matchRosters, matchEvents } = await import('./src/db/schema');
       const { or, isNull } = await import('drizzle-orm');
       let activeMatch = await db.select().from(matches).where(or(eq(matches.status, 'SCHEDULED'), eq(matches.status, 'PREPARING'), eq(matches.status, 'IN_PROGRESS'))).limit(1);
       
@@ -92,7 +92,7 @@ async function startServer() {
 
   app.get("/api/admin/matches/:id/data", async (req, res) => {
     try {
-      const { matches, teams, players, matchEvents } = await import('./src/db/schema.js');
+      const { matches, teams, players, matchEvents } = await import('./src/db/schema');
       const { eq, asc, desc } = await import('drizzle-orm');
       
       const matchId = parseInt(req.params.id);
@@ -112,7 +112,7 @@ async function startServer() {
       
       const events = await db.select().from(matchEvents).where(eq(matchEvents.matchId, match.id)).orderBy(desc(matchEvents.timestamp));
       
-      const { matchRosters } = await import('./src/db/schema.js');
+      const { matchRosters } = await import('./src/db/schema');
       const rosters = await db.select().from(matchRosters).where(eq(matchRosters.matchId, match.id)).orderBy(asc(matchRosters.sortOrder));
       
       res.json({
@@ -128,24 +128,52 @@ async function startServer() {
     }
   });
 
+  app.get("/api/mesa/matches/ready", async (req, res) => {
+    try {
+      const { matches, teams } = await import('./src/db/schema');
+      const { eq } = await import('drizzle-orm');
+      
+      const readyMatchesData = await db.select().from(matches).where(eq(matches.status, 'READY_FOR_DESK'));
+      
+      const matchesWithTeams = [];
+      for (const match of readyMatchesData) {
+        const homeTeam = await db.select().from(teams).where(eq(teams.id, match.homeTeamId)).limit(1).then(res => res[0]);
+        const awayTeam = await db.select().from(teams).where(eq(teams.id, match.awayTeamId)).limit(1).then(res => res[0]);
+        
+        matchesWithTeams.push({
+           ...match,
+           homeTeamName: homeTeam?.name || 'Local',
+           awayTeamName: awayTeam?.name || 'Visitante'
+        });
+      }
+      
+      res.json({ matches: matchesWithTeams });
+    } catch(e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to fetch ready matches" });
+    }
+  });
+
   app.get("/api/public/live-match", async (req, res) => {
     try {
-      const { matches, teams, players, matchEvents } = await import('./src/db/schema.js');
+      const { matches, teams, players, matchEvents } = await import('./src/db/schema');
       const { eq, or, asc, desc } = await import('drizzle-orm');
 
-      // Find the first IN_PROGRESS, PREPARING, or SCHEDULED match
+      // Find the first IN_PROGRESS, READY_FOR_DESK, PREPARING, SCHEDULED or PUBLISHED match
       let matchData = await db.select().from(matches).where(or(
         eq(matches.status, 'IN_PROGRESS'),
+        eq(matches.status, 'READY_FOR_DESK'),
         eq(matches.status, 'PREPARING'),
-        eq(matches.status, 'SCHEDULED')
-      )).limit(1);
+        eq(matches.status, 'SCHEDULED'),
+        eq(matches.status, 'PUBLISHED')
+      )).orderBy(desc(matches.createdAt)).limit(1);
 
       if (matchData.length === 0) {
         return res.json({ live: false });
       }
 
       const match = matchData[0];
-      const { leagues } = await import('./src/db/schema.js');
+      const { leagues } = await import('./src/db/schema');
       const league = await db.select().from(leagues).limit(1).then(res => res[0]);
       const homeTeam = await db.select().from(teams).where(eq(teams.id, match.homeTeamId)).limit(1).then(res => res[0]);
       const awayTeam = await db.select().from(teams).where(eq(teams.id, match.awayTeamId)).limit(1).then(res => res[0]);
@@ -155,7 +183,7 @@ async function startServer() {
       
       const events = await db.select().from(matchEvents).where(eq(matchEvents.matchId, match.id)).orderBy(desc(matchEvents.timestamp));
       
-      const { matchRosters } = await import('./src/db/schema.js');
+      const { matchRosters } = await import('./src/db/schema');
       const rosters = await db.select().from(matchRosters).where(eq(matchRosters.matchId, match.id)).orderBy(asc(matchRosters.sortOrder));
       
       res.json({
@@ -175,7 +203,8 @@ async function startServer() {
 
   app.post("/api/admin/matches/:id/events", async (req, res) => {
     try {
-      const { matchEvents } = await import('./src/db/schema.js');
+      const { matchEvents, matches } = await import('./src/db/schema');
+      const { eq } = await import('drizzle-orm');
       const matchId = parseInt(req.params.id);
       const { type, primaryPlayerId, secondaryPlayerId, payload } = req.body;
       
@@ -187,6 +216,9 @@ async function startServer() {
         payload
       }).returning();
       
+      // If it's the first event or the match is not IN_PROGRESS, set it to IN_PROGRESS
+      await db.update(matches).set({ status: 'IN_PROGRESS' }).where(eq(matches.id, matchId));
+      
       res.json(newEvent);
     } catch (error) {
       console.error(error);
@@ -194,9 +226,44 @@ async function startServer() {
     }
   });
 
+  app.post("/api/admin/matches/:id/finish", async (req, res) => {
+    try {
+      const { matches } = await import('./src/db/schema');
+      const { eq } = await import('drizzle-orm');
+      const matchId = parseInt(req.params.id);
+      
+      await db.update(matches).set({ status: 'FINISHED' }).where(eq(matches.id, matchId));
+      
+      res.json({ success: true });
+    } catch(e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to finish match" });
+    }
+  });
+
+  app.post("/api/admin/matches/:id/publish", async (req, res) => {
+    try {
+      const { matches } = await import('./src/db/schema');
+      const { eq } = await import('drizzle-orm');
+      const matchId = parseInt(req.params.id);
+      const { refereeReport, tableObservations } = req.body;
+      
+      await db.update(matches).set({ 
+        status: 'PUBLISHED',
+        refereeReport,
+        tableObservations
+      }).where(eq(matches.id, matchId));
+      
+      res.json({ success: true });
+    } catch(e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to publish match" });
+    }
+  });
+
   app.post("/api/admin/matches/:id/roster", async (req, res) => {
     try {
-      const { matchRosters, matches, teams } = await import('./src/db/schema.js');
+      const { matchRosters, matches, teams } = await import('./src/db/schema');
       const { eq } = await import('drizzle-orm');
       const matchId = parseInt(req.params.id);
       
@@ -222,7 +289,7 @@ async function startServer() {
       }
       
       // Update match status
-      await db.update(matches).set({ status: 'PREPARING' }).where(eq(matches.id, match.id));
+      await db.update(matches).set({ status: 'READY_FOR_DESK' }).where(eq(matches.id, match.id));
       
       res.json({ success: true });
     } catch(error) {

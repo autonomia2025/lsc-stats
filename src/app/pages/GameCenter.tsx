@@ -84,7 +84,7 @@ export default function GameCenter() {
     );
   }
 
-  if (!data) {
+  if (!data || !data.homeTeam || !data.awayTeam) {
     return (
       <div className="flex flex-col h-screen w-full bg-[#020617] font-sans text-white items-center justify-center">
         <h1 className="text-2xl font-bold tracking-tight">No hay partido en vivo</h1>
@@ -142,9 +142,9 @@ export default function GameCenter() {
               {/* Home Team */}
               <div className="text-center">
                 <div className="w-24 h-24 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-center mb-4 backdrop-blur-sm mx-auto">
-                  <div className="text-4xl font-bold">{homeTeam.name.substring(0, 2).toUpperCase()}</div>
+                  <div className="text-4xl font-bold">{homeTeam?.name?.substring(0, 2).toUpperCase() || 'L'}</div>
                 </div>
-                <h3 className="text-xl font-bold tracking-tight">{homeTeam.name}</h3>
+                <h3 className="text-xl font-bold tracking-tight">{homeTeam?.name || 'Local'}</h3>
                 <p className="text-xs text-white/40 uppercase tracking-widest mt-1">Local</p>
               </div>
               
@@ -170,9 +170,9 @@ export default function GameCenter() {
               {/* Away Team */}
               <div className="text-center">
                 <div className="w-24 h-24 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-center mb-4 backdrop-blur-sm mx-auto">
-                  <div className="text-4xl font-bold text-orange-400">{awayTeam.name.substring(0, 2).toUpperCase()}</div>
+                  <div className="text-4xl font-bold text-orange-400">{awayTeam?.name?.substring(0, 2).toUpperCase() || 'V'}</div>
                 </div>
-                <h3 className="text-xl font-bold tracking-tight">{awayTeam.name}</h3>
+                <h3 className="text-xl font-bold tracking-tight">{awayTeam?.name || 'Visitante'}</h3>
                 <p className="text-xs text-white/40 uppercase tracking-widest mt-1">Visita</p>
               </div>
             </div>
@@ -193,7 +193,7 @@ export default function GameCenter() {
                 const player = getPlayer(ev.primaryPlayerId);
                 const time = new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 const isLocal = homeTeam.activePlayers.find((p: Player) => p.id === ev.primaryPlayerId);
-                const teamName = isLocal ? homeTeam.name.substring(0, 3).toUpperCase() : awayTeam.name.substring(0, 3).toUpperCase();
+                const teamName = isLocal ? (homeTeam?.name?.substring(0, 3).toUpperCase() || 'LOC') : (awayTeam?.name?.substring(0, 3).toUpperCase() || 'VIS');
                 
                 return (
                   <div key={ev.id} className="flex gap-4 items-start">

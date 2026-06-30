@@ -43,9 +43,11 @@ export const matches = pgTable('matches', {
   seasonId: integer('season_id').references(() => seasons.id).notNull(),
   homeTeamId: integer('home_team_id').references(() => teams.id).notNull(),
   awayTeamId: integer('away_team_id').references(() => teams.id).notNull(),
-  status: text('status').notNull().default('SCHEDULED'), // SCHEDULED, PREPARING, IN_PROGRESS, FINISHED
+  status: text('status').notNull().default('SCHEDULED'), // SCHEDULED, PREPARING, READY_FOR_DESK, IN_PROGRESS, FINISHED, PUBLISHED
   scheduledDate: timestamp('scheduled_date'),
   location: text('location'),
+  refereeReport: text('referee_report'),
+  tableObservations: text('table_observations'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

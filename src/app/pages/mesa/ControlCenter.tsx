@@ -7,7 +7,26 @@ const ACTIONS = [
   { id: 'pt3', label: '+3 Pts', type: 'points', value: 3, color: 'bg-emerald-500' },
   { id: 'pt2', label: '+2 Pts', type: 'points', value: 2, color: 'bg-emerald-600' },
   { id: 'pt1', label: '+1 TL', type: 'points', value: 1, color: 'bg-emerald-700' },
-  { id: 'foul', label: 'Falta', type: 'foul', value: 0, color: 'bg-red-500' },
+  { id: 'foul_personal', label: 'Personal', type: 'foul', value: 1, color: 'bg-yellow-500' },
+  { id: 'foul_tecnica', label: 'Técnica', type: 'foul', value: 1, color: 'bg-orange-500' },
+  { id: 'foul_antideportiva', label: 'Antideportiva', type: 'foul', value: 1, color: 'bg-orange-600' },
+  { id: 'foul_descalificante', label: 'Descalificante', type: 'foul', value: 1, color: 'bg-red-600' },
+  { id: 'foul_expulsion', label: 'Expulsión', type: 'foul', value: 0, color: 'bg-red-800' },
+];
+
+const POINTS_ACTIONS = [
+  { id: 'pt3', label: '+3 Pts', type: 'points', value: 3, color: 'bg-emerald-500' },
+  { id: 'pt2', label: '+2 Pts', type: 'points', value: 2, color: 'bg-emerald-600' },
+  { id: 'pt1', label: '+1 TL', type: 'points', value: 1, color: 'bg-emerald-700' },
+  { id: 'foul', label: 'Falta', type: 'menu', value: 0, color: 'bg-red-500' },
+];
+
+const FOUL_ACTIONS = [
+  { id: 'foul_personal', label: 'Personal', type: 'foul', value: 1, color: 'bg-yellow-500' },
+  { id: 'foul_tecnica', label: 'Técnica', type: 'foul', value: 1, color: 'bg-orange-500' },
+  { id: 'foul_antideportiva', label: 'Antideportiva', type: 'foul', value: 1, color: 'bg-orange-600' },
+  { id: 'foul_descalificante', label: 'Descalificante', type: 'foul', value: 1, color: 'bg-red-600' },
+  { id: 'foul_expulsion', label: 'Expulsión', type: 'foul', value: 0, color: 'bg-red-800' },
 ];
 
 type EventType = {
@@ -31,6 +50,7 @@ export default function ControlCenter() {
   const navigate = useNavigate();
   const [events, setEvents] = useState<EventType[]>([]);
   const [selection, setSelection] = useState<SelectionState>({ type: 'none' });
+  const [foulMode, setFoulMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   
   const [localTeam, setLocalTeam] = useState<{ id: number, name: string, short: string, color: string, textColor: string, activePlayers: Player[] } | null>(null);
@@ -60,18 +80,18 @@ export default function ControlCenter() {
         setAllPlayersMap(playersMap);
 
         setLocalTeam({
-           id: data.homeTeam.id,
-           name: data.homeTeam.name,
-           short: data.homeTeam.name.substring(0, 2).toUpperCase(),
+           id: data.homeTeam?.id,
+           name: data.homeTeam?.name || 'Local',
+           short: data.homeTeam?.name?.substring(0, 2).toUpperCase() || 'LO',
            color: 'bg-blue-600',
            textColor: 'text-blue-400',
            activePlayers: localActive
         });
         
         setVisitorTeam({
-           id: data.awayTeam.id,
-           name: data.awayTeam.name,
-           short: data.awayTeam.name.substring(0, 2).toUpperCase(),
+           id: data.awayTeam?.id,
+           name: data.awayTeam?.name || 'Visitante',
+           short: data.awayTeam?.name?.substring(0, 2).toUpperCase() || 'VI',
            color: 'bg-orange-600',
            textColor: 'text-orange-400',
            activePlayers: visitorActive
@@ -96,14 +116,14 @@ export default function ControlCenter() {
     let visitorScore = 0;
     let localFouls = 0;
     let visitorFouls = 0;
-    const playerStats: Record<number, { points: number, fouls: number }> = {};
+    const playerStats: Record<number, { points: number, fouls: number, tecnicas: number, antideportivas: number, descalificante: boolean, expulsion: boolean }> = {};
 
     if (localTeam && visitorTeam) {
        [...localTeam.activePlayers, ...visitorTeam.activePlayers].forEach(p => {
-         playerStats[p.id] = { points: 0, fouls: 0 };
+         playerStats[p.id] = { points: 0, fouls: 0, tecnicas: 0, antideportivas: 0, descalificante: false, expulsion: false };
        });
        Object.values(allPlayersMap).forEach(p => {
-          if(!playerStats[p.id]) playerStats[p.id] = { points: 0, fouls: 0 };
+          if(!playerStats[p.id]) playerStats[p.id] = { points: 0, fouls: 0, tecnicas: 0, antideportivas: 0, descalificante: false, expulsion: false };
        });
     }
 
@@ -119,9 +139,15 @@ export default function ControlCenter() {
         if (isLocal === 'visitor') visitorScore += action.value;
         if (playerStats[ev.primaryPlayerId]) playerStats[ev.primaryPlayerId].points += action.value;
       } else if (action.type === 'foul') {
-        if (isLocal === 'local') localFouls += 1;
-        if (isLocal === 'visitor') visitorFouls += 1;
-        if (playerStats[ev.primaryPlayerId]) playerStats[ev.primaryPlayerId].fouls += 1;
+        if (isLocal === 'local') localFouls += action.value;
+        if (isLocal === 'visitor') visitorFouls += action.value;
+        if (playerStats[ev.primaryPlayerId]) {
+          playerStats[ev.primaryPlayerId].fouls += action.value;
+          if (action.id === 'foul_tecnica') playerStats[ev.primaryPlayerId].tecnicas++;
+          if (action.id === 'foul_antideportiva') playerStats[ev.primaryPlayerId].antideportivas++;
+          if (action.id === 'foul_descalificante') playerStats[ev.primaryPlayerId].descalificante = true;
+          if (action.id === 'foul_expulsion') playerStats[ev.primaryPlayerId].expulsion = true;
+        }
       }
     });
 
@@ -144,6 +170,11 @@ export default function ControlCenter() {
   };
 
   const handleActionClick = (actionId: string) => {
+    if (actionId === 'foul') {
+      setFoulMode(true);
+      return;
+    }
+
     if (selection.type === 'player') {
       // Complete event: Player -> Action
       const action = ACTIONS.find(a => a.id === actionId)!;
@@ -151,6 +182,7 @@ export default function ControlCenter() {
     } else if (selection.type === 'action' && selection.actionId === actionId) {
       // Toggle off
       setSelection({ type: 'none' });
+      setFoulMode(false);
     } else {
       // Select Action
       setSelection({ type: 'action', actionId });
@@ -159,6 +191,7 @@ export default function ControlCenter() {
 
   const addEvent = async (action: typeof ACTIONS[0], playerId: number, teamId: 'local' | 'visitor') => {
     setSelection({ type: 'none' }); // Reset immediately for UX speed
+    setFoulMode(false);
     try {
        const res = await fetch(`/api/admin/matches/${id}/events`, {
           method: 'POST',
@@ -191,9 +224,10 @@ export default function ControlCenter() {
   // --- RENDER HELPERS ---
   const renderPlayerCard = (player: Player, team: typeof localTeam, align: 'left' | 'right') => {
     if (!team) return null;
-    const pStats = stats.playerStats[player.id] || { points: 0, fouls: 0 };
+    const pStats = stats.playerStats[player.id] || { points: 0, fouls: 0, tecnicas: 0, antideportivas: 0, descalificante: false, expulsion: false };
     const isSelected = selection.type === 'player' && selection.playerId === player.id;
     const isFoulTrouble = pStats.fouls >= 4;
+    const isOut = pStats.fouls >= 5 || pStats.descalificante || pStats.expulsion;
     
     return (
       <div 
@@ -203,19 +237,25 @@ export default function ControlCenter() {
           relative flex items-center p-3 rounded-2xl cursor-pointer transition-all select-none border-2 h-24
           ${isSelected 
             ? `${team.color.replace('bg-', 'bg-')}/20 border-${team.color.replace('bg-', '')} shadow-[0_0_20px_rgba(0,0,0,0.5)] z-10 scale-105` 
-            : 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/10'
+            : isOut ? 'bg-red-950/20 border-red-900/30 opacity-70 hover:opacity-100' : 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/10'
           }
           ${align === 'right' ? 'flex-row-reverse' : 'flex-row'}
         `}
       >
-        <div className={`w-14 h-14 shrink-0 rounded-xl bg-white/10 flex items-center justify-center text-2xl font-bold ${team.textColor}`}>
+        <div className={`w-14 h-14 shrink-0 rounded-xl flex items-center justify-center text-2xl font-bold ${isOut ? 'bg-red-900/50 text-red-500' : `bg-white/10 ${team.textColor}`}`}>
           {player.jerseyNumber}
         </div>
         <div className={`flex-1 flex flex-col justify-center ${align === 'right' ? 'mr-4 text-right' : 'ml-4 text-left'}`}>
-          <span className="font-bold text-lg leading-tight truncate">{player.firstName} {player.lastName}</span>
-          <div className={`flex gap-3 text-sm mt-1 font-mono ${align === 'right' ? 'justify-end' : 'justify-start'}`}>
+          <span className={`font-bold text-lg leading-tight truncate ${isOut ? 'text-red-500' : ''}`}>{player.firstName} {player.lastName}</span>
+          <div className={`flex gap-3 text-sm mt-1 font-mono items-center ${align === 'right' ? 'justify-end' : 'justify-start'}`}>
             <span className="text-white/70">{pStats.points} pts</span>
             <span className={isFoulTrouble ? 'text-red-400 font-bold' : 'text-white/40'}>{pStats.fouls} flt</span>
+            <div className="flex gap-1 ml-1">
+              {pStats.tecnicas > 0 && <span className="text-[10px] bg-orange-500 text-white px-1.5 py-0.5 rounded font-bold leading-none" title="Técnica">T</span>}
+              {pStats.antideportivas > 0 && <span className="text-[10px] bg-orange-600 text-white px-1.5 py-0.5 rounded font-bold leading-none" title="Antideportiva">A</span>}
+              {pStats.descalificante && <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-bold leading-none" title="Descalificante">D</span>}
+              {pStats.expulsion && <span className="text-[10px] bg-red-800 text-white px-1.5 py-0.5 rounded font-bold leading-none" title="Expulsión">E</span>}
+            </div>
           </div>
         </div>
       </div>
@@ -236,7 +276,7 @@ export default function ControlCenter() {
       {/* Top Scoreboard Bar */}
       <header className="h-24 bg-[#050B18] border-b border-white/5 flex items-center justify-between px-8 shrink-0">
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate('/admin')} className="p-3 rounded-full bg-white/5 hover:bg-white/10 transition-colors text-white/50 hover:text-white">
+          <button onClick={() => navigate('/mesa')} className="p-3 rounded-full bg-white/5 hover:bg-white/10 transition-colors text-white/50 hover:text-white">
             <ChevronLeft className="w-6 h-6" />
           </button>
           <div className="flex flex-col">
@@ -261,7 +301,17 @@ export default function ControlCenter() {
             <span className={`text-3xl font-black tracking-tighter ${visitorTeam.textColor}`}>{visitorTeam.short}</span>
             <span className="text-xs text-white/40 uppercase tracking-widest font-bold">Faltas: {stats.visitorFouls}</span>
           </div>
-          <div className="w-12 h-12" />
+          <button 
+            onClick={async () => {
+              if(confirm('¿Seguro que quieres finalizar este partido?')) {
+                await fetch(`/api/admin/matches/${id}/finish`, { method: 'POST' });
+                navigate(`/mesa/${id}/acta`);
+              }
+            }}
+            className="ml-4 px-4 py-2 bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white border border-red-500/30 rounded-xl text-sm font-bold transition-colors cursor-pointer"
+          >
+            Finalizar
+          </button>
         </div>
       </header>
 
@@ -292,25 +342,49 @@ export default function ControlCenter() {
           </div>
 
           <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
-            {ACTIONS.map(action => {
-              const isSelected = selection.type === 'action' && selection.actionId === action.id;
-              return (
-                <div
-                  key={action.id}
-                  onClick={() => handleActionClick(action.id)}
-                  className={`
-                    ${action.id === 'foul' ? 'col-span-2' : ''}
-                    h-24 rounded-3xl flex items-center justify-center text-2xl font-black cursor-pointer transition-all select-none
-                    ${isSelected 
-                      ? `${action.color} text-white shadow-[0_0_30px_rgba(0,0,0,0.5)] scale-105 z-10` 
-                      : `${action.color}/20 text-${action.color.split('-')[1]}-400 hover:${action.color}/40 border border-${action.color.split('-')[1]}-500/30`
-                    }
-                  `}
+            {foulMode ? (
+              <>
+                {FOUL_ACTIONS.map(action => (
+                  <div
+                    key={action.id}
+                    onClick={() => handleActionClick(action.id)}
+                    className={`
+                      ${action.id === 'foul_expulsion' ? 'col-span-2' : ''}
+                      h-20 rounded-3xl flex items-center justify-center text-lg font-black cursor-pointer transition-all select-none
+                      ${action.color}/20 text-${action.color.split('-')[1]}-400 hover:${action.color}/40 border border-${action.color.split('-')[1]}-500/30
+                    `}
+                  >
+                    {action.label}
+                  </div>
+                ))}
+                <div 
+                  onClick={() => setFoulMode(false)}
+                  className="col-span-2 h-14 mt-2 rounded-2xl flex items-center justify-center text-sm font-bold cursor-pointer transition-all select-none bg-white/5 text-white/50 hover:bg-white/10 hover:text-white"
                 >
-                  {action.label}
+                  VOLVER
                 </div>
-              );
-            })}
+              </>
+            ) : (
+              POINTS_ACTIONS.map(action => {
+                const isSelected = selection.type === 'action' && selection.actionId === action.id;
+                return (
+                  <div
+                    key={action.id}
+                    onClick={() => handleActionClick(action.id)}
+                    className={`
+                      ${action.id === 'foul' ? 'col-span-2' : ''}
+                      h-24 rounded-3xl flex items-center justify-center text-2xl font-black cursor-pointer transition-all select-none
+                      ${isSelected 
+                        ? `${action.color} text-white shadow-[0_0_30px_rgba(0,0,0,0.5)] scale-105 z-10` 
+                        : `${action.color}/20 text-${action.color.split('-')[1]}-400 hover:${action.color}/40 border border-${action.color.split('-')[1]}-500/30`
+                      }
+                    `}
+                  >
+                    {action.label}
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -353,7 +427,14 @@ export default function ControlCenter() {
                 >
                   <div className="flex flex-col">
                     <span className="text-xs font-bold text-white/50">{team.short} #{player.jerseyNumber}</span>
-                    <span className={`font-black ${action.type === 'points' ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <span className={`font-black ${
+                      action.type === 'points' ? 'text-emerald-400' : 
+                      action.id === 'foul_expulsion' ? 'text-red-700' :
+                      action.id === 'foul_descalificante' ? 'text-red-500' :
+                      action.id === 'foul_antideportiva' ? 'text-orange-600' :
+                      action.id === 'foul_tecnica' ? 'text-orange-500' :
+                      'text-yellow-500'
+                    }`}>
                       {action.label}
                     </span>
                   </div>
