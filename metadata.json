@@ -1,0 +1,6 @@
+{
+  "name": "LSC Game Center",
+  "description": "Hogar digital y plataforma oficial de la Liga de Básquetbol San Clemente. Incluye Control Center para partidos en vivo y Game Center para fanáticos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
