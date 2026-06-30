@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, LayoutDashboard, Trophy, Users, Settings, LogOut, CalendarDays, Activity, Plus, Clock, ChevronRight, UserPlus } from 'lucide-react';
+import { Loader2, LayoutDashboard, Trophy, Users, Settings, LogOut, CalendarDays, Activity, Plus, Clock, ChevronRight, UserPlus, PlayCircle, FileText, CheckCircle } from 'lucide-react';
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
@@ -8,11 +8,14 @@ export default function AdminDashboard() {
   const [dashboardData, setDashboardData] = useState<{
     leagueName: string;
     activeSeason: string;
+    activeSeasonId: number | null;
     teamsCount: number;
-    todayMatchId?: number;
-    homeTeamName?: string;
-    awayTeamName?: string;
   } | null>(null);
+  
+  const [matchdays, setMatchdays] = useState<any[]>([]);
+  const [teams, setTeams] = useState<any[]>([]);
+  const [isCreatingMatchday, setIsCreatingMatchday] = useState(false);
+  const [newMatchdayName, setNewMatchdayName] = useState('');
 
   useEffect(() => {
     fetch('/api/setup/status')
@@ -21,12 +24,22 @@ export default function AdminDashboard() {
         if (!data.isSetupComplete) {
           navigate('/admin/setup');
         } else {
-          // Fetch dashboard data
           return fetch('/api/admin/dashboard')
             .then(res => res.json())
             .then(dashData => {
               setDashboardData(dashData);
-              setIsLoading(false);
+              if (dashData.activeSeasonId) {
+                Promise.all([
+                  fetch(`/api/admin/seasons/${dashData.activeSeasonId}/matchdays`).then(res => res.json()),
+                  fetch('/api/admin/teams').then(res => res.json())
+                ]).then(([mdData, teamsData]) => {
+                  setMatchdays(mdData);
+                  setTeams(teamsData);
+                  setIsLoading(false);
+                });
+              } else {
+                setIsLoading(false);
+              }
             });
         }
       })
@@ -35,6 +48,58 @@ export default function AdminDashboard() {
         setIsLoading(false);
       });
   }, [navigate]);
+
+  const handleCreateMatchday = async () => {
+    if (!newMatchdayName || !dashboardData?.activeSeasonId) return;
+    
+    try {
+      const res = await fetch(`/api/admin/seasons/${dashboardData.activeSeasonId}/matchdays`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newMatchdayName })
+      });
+      const newMd = await res.json();
+      setMatchdays([{...newMd, matches: []}, ...matchdays]);
+      setIsCreatingMatchday(false);
+      setNewMatchdayName('');
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  const handleAddMatch = async (matchdayId: number, homeTeamId: number, awayTeamId: number) => {
+    if(homeTeamId === awayTeamId) {
+      alert('Un equipo no puede jugar contra sí mismo');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/matchdays/${matchdayId}/matches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          homeTeamId, 
+          awayTeamId,
+          seasonId: dashboardData?.activeSeasonId
+        })
+      });
+      const newMatch = await res.json();
+      
+      const homeTeam = teams.find(t => t.id === homeTeamId);
+      const awayTeam = teams.find(t => t.id === awayTeamId);
+      
+      setMatchdays(matchdays.map(md => {
+        if (md.id === matchdayId) {
+          return {
+            ...md,
+            matches: [...md.matches, { ...newMatch, homeTeam, awayTeam }]
+          };
+        }
+        return md;
+      }));
+    } catch(e) {
+      console.error(e);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -63,7 +128,7 @@ export default function AdminDashboard() {
         {/* Sidebar */}
         <aside className="w-64 border-r border-white/5 bg-[#050B18]/50 p-4 flex flex-col gap-2">
           <button className="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-500/10 text-blue-400 font-medium transition-colors">
-            <LayoutDashboard className="w-5 h-5" /> Dashboard
+            <LayoutDashboard className="w-5 h-5" /> Jornadas
           </button>
           <button className="flex items-center gap-3 px-4 py-3 rounded-xl text-white/60 hover:text-white hover:bg-white/5 font-medium transition-colors cursor-not-allowed opacity-50">
             <Trophy className="w-5 h-5" /> Temporadas
@@ -86,131 +151,152 @@ export default function AdminDashboard() {
           <div className="max-w-5xl mx-auto">
             <div className="flex justify-between items-end mb-8">
               <div>
-                <h1 className="text-3xl font-bold tracking-tight mb-2">Hola, Organizador</h1>
-                <p className="text-white/50 text-lg">Aquí tienes el estado actual de tu liga.</p>
+                <h1 className="text-3xl font-bold tracking-tight mb-2">Jornadas de la Liga</h1>
+                <p className="text-white/50 text-lg">Gestiona todos los partidos del fin de semana.</p>
               </div>
               <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 text-blue-400 px-4 py-2 rounded-xl text-sm font-medium">
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
                 Temporada Activa: {dashboardData?.activeSeason || '---'}
               </div>
             </div>
             
-            {/* Bento Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Action Bar */}
+            <div className="mb-8 flex items-center justify-between bg-white/[0.02] border border-white/5 rounded-3xl p-4">
+              <div className="flex items-center gap-4">
+                 <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
+                    <CalendarDays className="w-5 h-5" />
+                 </div>
+                 <div>
+                    <h3 className="font-bold">Gestionar Calendario</h3>
+                    <p className="text-xs text-white/50">Crea una nueva jornada para programar partidos.</p>
+                 </div>
+              </div>
               
-              {/* Main Operations Card (Takes 2 cols) */}
-              <div className="md:col-span-2 bg-gradient-to-br from-blue-900/40 to-slate-900/40 border border-blue-500/20 rounded-3xl p-8 relative overflow-hidden flex flex-col justify-between min-h-[300px]">
-                <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-500/10 rounded-full blur-[80px] -translate-y-1/2 translate-x-1/3 pointer-events-none" />
-                
-                <div className="relative z-10">
-                  <div className="flex items-center gap-2 text-blue-400 font-mono text-sm uppercase tracking-widest mb-4">
-                    <Activity className="w-4 h-4" /> Centro de Operaciones
-                  </div>
-                  <h2 className="text-3xl font-bold mb-2">Partido de Hoy</h2>
-                  
-                  <div className="bg-black/40 border border-white/5 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between backdrop-blur-sm gap-6 mt-6">
-                    
-                    {/* Teams */}
-                    <div className="flex items-center gap-4 sm:gap-8 w-full md:w-auto justify-center md:justify-start">
-                      <div className="flex flex-col items-center">
-                        <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center font-bold text-xl border border-white/10 mb-2 shadow-inner">
-                          {dashboardData?.homeTeamName?.substring(0, 2).toUpperCase() || 'L'}
-                        </div>
-                        <span className="font-medium text-sm text-center">{dashboardData?.homeTeamName || 'Local'}</span>
-                      </div>
-                      
-                      <div className="text-white/30 font-bold italic text-lg">VS</div>
-                      
-                      <div className="flex flex-col items-center">
-                        <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center font-bold text-xl border border-white/10 mb-2 shadow-inner">
-                          {dashboardData?.awayTeamName?.substring(0, 2).toUpperCase() || 'V'}
-                        </div>
-                        <span className="font-medium text-sm text-center">{dashboardData?.awayTeamName || 'Visitante'}</span>
-                      </div>
-                    </div>
-
-                    {/* Info & Action */}
-                    <div className="flex flex-col items-center md:items-end w-full md:w-auto gap-4 shrink-0">
-                      <div className="text-center md:text-right">
-                        <p className="text-xl font-bold text-white">20:30 hrs</p>
-                        <p className="text-sm text-white/50">Gimnasio Municipal</p>
-                      </div>
-                      <button 
-                        onClick={() => dashboardData?.todayMatchId && navigate(`/admin/prepare-match/${dashboardData.todayMatchId}`)}
-                        disabled={!dashboardData?.todayMatchId}
-                        className="w-full md:w-auto bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-bold text-sm transition-colors cursor-pointer shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Preparar Partido
-                      </button>
-                    </div>
-                  </div>
+              {!isCreatingMatchday ? (
+                <button 
+                  onClick={() => setIsCreatingMatchday(true)}
+                  className="bg-white/10 hover:bg-white/20 text-white px-6 py-2 rounded-xl font-bold text-sm transition-colors cursor-pointer flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" /> Nueva Jornada
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="text"
+                    placeholder="Ej. Fecha 1"
+                    value={newMatchdayName}
+                    onChange={e => setNewMatchdayName(e.target.value)}
+                    className="bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-blue-500"
+                    autoFocus
+                  />
+                  <button onClick={handleCreateMatchday} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-bold">Guardar</button>
+                  <button onClick={() => setIsCreatingMatchday(false)} className="bg-white/5 hover:bg-white/10 text-white px-4 py-2 rounded-xl text-sm font-bold">Cancelar</button>
                 </div>
-              </div>
-
-              {/* Quick Metrics Stack (1 col) */}
-              <div className="flex flex-col gap-6">
-                {/* Metric 1 */}
-                <div className="bg-white/[0.02] border border-white/5 rounded-3xl p-6 flex-1 flex flex-col justify-center">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="w-10 h-10 rounded-xl bg-orange-500/10 text-orange-400 flex items-center justify-center">
-                      <Users className="w-5 h-5" />
-                    </div>
-                    <span className="text-2xl font-bold tracking-tight">{dashboardData?.teamsCount ?? '--'}</span>
-                  </div>
-                  <h3 className="text-sm font-medium text-white/50 uppercase tracking-wider">Equipos Inscritos</h3>
-                </div>
-
-                {/* Metric 2 */}
-                <div className="bg-white/[0.02] border border-white/5 rounded-3xl p-6 flex-1 flex flex-col justify-center">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="w-10 h-10 rounded-xl bg-green-500/10 text-green-400 flex items-center justify-center">
-                      <Trophy className="w-5 h-5" />
-                    </div>
-                    <span className="text-2xl font-bold tracking-tight">0</span>
-                  </div>
-                  <h3 className="text-sm font-medium text-white/50 uppercase tracking-wider">Partidos Jugados</h3>
-                </div>
-              </div>
-
-              {/* Bottom Row: Quick Tools (1 col) */}
-              <div className="bg-white/[0.02] border border-white/5 rounded-3xl p-6">
-                <h3 className="text-sm font-bold text-white/80 uppercase tracking-wider mb-4">Acciones Rápidas</h3>
-                <div className="space-y-2">
-                  <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors group cursor-pointer text-left">
-                    <div className="flex items-center gap-3">
-                      <Plus className="w-4 h-4 text-white/40 group-hover:text-white transition-colors" />
-                      <span className="text-sm font-medium text-white/70 group-hover:text-white transition-colors">Inscribir Equipo</span>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/50" />
-                  </button>
-                  <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors group cursor-pointer text-left">
-                    <div className="flex items-center gap-3">
-                      <UserPlus className="w-4 h-4 text-white/40 group-hover:text-white transition-colors" />
-                      <span className="text-sm font-medium text-white/70 group-hover:text-white transition-colors">Registrar Jugador</span>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/50" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Bottom Row: Recent Activity (2 cols) */}
-              <div className="md:col-span-2 bg-white/[0.02] border border-white/5 rounded-3xl p-6">
-                 <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-sm font-bold text-white/80 uppercase tracking-wider flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-white/40" /> Últimos Resultados
-                    </h3>
-                    <button className="text-xs text-blue-400 hover:text-blue-300 font-medium cursor-pointer">Ver todos</button>
-                 </div>
-
-                 <div className="h-[120px] flex flex-col items-center justify-center border-2 border-dashed border-white/5 rounded-2xl">
-                    <p className="text-white/30 text-sm">Aún no hay resultados registrados en esta temporada.</p>
-                 </div>
-              </div>
-
+              )}
             </div>
+
+            {/* Matchdays List */}
+            <div className="space-y-8">
+              {matchdays.map((md, mdIndex) => (
+                <div key={md.id} className="bg-white/[0.02] border border-white/5 rounded-3xl p-6">
+                  <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-xl font-bold">{md.name}</h2>
+                      <span className={`text-xs px-2 py-1 rounded font-bold ${
+                        md.status === 'ACTIVE' ? 'bg-emerald-500/20 text-emerald-400' :
+                        md.status === 'FINISHED' ? 'bg-white/10 text-white/50' :
+                        'bg-blue-500/20 text-blue-400'
+                      }`}>
+                        {md.status}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 gap-4 mb-6">
+                    {md.matches.length === 0 ? (
+                      <div className="text-center py-8 text-white/30 text-sm border-2 border-dashed border-white/5 rounded-2xl">
+                        Aún no hay partidos programados para esta jornada.
+                      </div>
+                    ) : (
+                      md.matches.map((match: any) => (
+                        <div key={match.id} className="bg-black/40 border border-white/5 rounded-2xl p-4 flex items-center justify-between">
+                           <div className="flex flex-col">
+                             <span className="text-xs font-bold text-white/40 mb-2">Partido #{match.id} - {match.status}</span>
+                             <div className="flex items-center gap-4">
+                                <span className="font-bold text-lg">{match.homeTeam.name}</span>
+                                <span className="text-white/30 text-sm">vs</span>
+                                <span className="font-bold text-lg">{match.awayTeam.name}</span>
+                             </div>
+                           </div>
+                           
+                           <div>
+                             {match.status === 'SCHEDULED' && (
+                               <button 
+                                 onClick={() => navigate(`/admin/prepare-match/${match.id}`)}
+                                 className="bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center gap-2"
+                               >
+                                 <Plus className="w-4 h-4" /> Preparar Roster
+                               </button>
+                             )}
+                             {(match.status === 'READY_FOR_DESK' || match.status === 'IN_PROGRESS' || match.status === 'HALFTIME' || match.status === 'INTERMISSION') && (
+                               <div className="flex items-center gap-2 text-emerald-400 bg-emerald-500/10 px-4 py-2 rounded-xl text-sm font-bold">
+                                 <Activity className="w-4 h-4 animate-pulse" />
+                                 En Mesa
+                               </div>
+                             )}
+                             {match.status === 'FINISHED' && (
+                               <button 
+                                 onClick={() => navigate(`/mesa/${match.id}/acta`)}
+                                 className="bg-orange-600/20 text-orange-400 hover:bg-orange-600 hover:text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center gap-2"
+                               >
+                                 <FileText className="w-4 h-4" /> Revisar Acta
+                               </button>
+                             )}
+                             {(match.status === 'OFFICIALIZED' || match.status === 'PUBLISHED') && (
+                               <div className="flex items-center gap-2 text-white/50 bg-white/5 px-4 py-2 rounded-xl text-sm font-bold">
+                                 <CheckCircle className="w-4 h-4" />
+                                 Publicado
+                               </div>
+                             )}
+                           </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  
+                  {/* Add Match Form (simplified inline) */}
+                  <div className="border-t border-white/5 pt-4">
+                    <form 
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const fd = new FormData(e.currentTarget);
+                        const homeId = parseInt(fd.get('homeId') as string);
+                        const awayId = parseInt(fd.get('awayId') as string);
+                        if(homeId && awayId) handleAddMatch(md.id, homeId, awayId);
+                      }}
+                      className="flex items-center gap-4"
+                    >
+                      <select name="homeId" className="bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-sm text-white focus:outline-none" required>
+                        <option value="">Local...</option>
+                        {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                      <span className="text-white/30 text-xs">VS</span>
+                      <select name="awayId" className="bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-sm text-white focus:outline-none" required>
+                        <option value="">Visitante...</option>
+                        {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                      <button type="submit" className="bg-white/5 hover:bg-white/10 text-white/70 hover:text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center gap-2">
+                        <Plus className="w-4 h-4" /> Agregar Partido
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ))}
+            </div>
+
           </div>
         </main>
       </div>
     </div>
   );
 }
+

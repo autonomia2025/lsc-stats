@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, Trash2, Clock, Activity, Users, Loader2 } from 'lucide-react';
+import { ChevronLeft, Trash2, Clock, Activity, Users, Loader2, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { buildMatchProjection, getNextPeriodAction, MatchEvent } from '../../../domain/matchProjection';
 
 const ACTIONS = [
   { id: 'pt3', label: '+3 Pts', type: 'points', value: 3, color: 'bg-emerald-500' },
@@ -29,13 +30,9 @@ const FOUL_ACTIONS = [
   { id: 'foul_expulsion', label: 'Expulsión', type: 'foul', value: 0, color: 'bg-red-800' },
 ];
 
-type EventType = {
-  id: number;
-  timestamp: string;
-  type: string;
-  primaryPlayerId: number;
-  teamId?: 'local' | 'visitor'; // We will derive this locally
-  actionId?: string; // We will derive this locally
+type EventType = MatchEvent & {
+  uiTeamId?: 'local' | 'visitor';
+  actionId?: string;
 };
 
 type SelectionState = 
@@ -100,8 +97,13 @@ export default function ControlCenter() {
         // Map backend events to frontend representation
         const mappedEvents = data.events.map((ev: any) => {
            const player = playersMap[ev.primaryPlayerId];
-           const teamId = player && localActiveIds.includes(player.id) ? 'local' : 'visitor';
-           return { ...ev, teamId, actionId: ev.type };
+           let uiTeamId = 'local';
+           if (ev.teamId === data.awayTeam.id) uiTeamId = 'visitor';
+           else if (player && visitorActiveIds.includes(player.id)) uiTeamId = 'visitor';
+           else if (player && localActiveIds.includes(player.id)) uiTeamId = 'local';
+           else if (ev.teamId === data.homeTeam.id) uiTeamId = 'local';
+           
+           return { ...ev, uiTeamId, actionId: ev.type };
         });
         
         setEvents(mappedEvents);
@@ -118,6 +120,11 @@ export default function ControlCenter() {
     let visitorFouls = 0;
     const playerStats: Record<number, { points: number, fouls: number, tecnicas: number, antideportivas: number, descalificante: boolean, expulsion: boolean }> = {};
 
+    let projection = {
+      homeScore: 0, awayScore: 0, homeFouls: 0, awayFouls: 0, homeTimeouts: 0, awayTimeouts: 0,
+      currentPeriod: null as string | null, periodState: 'PRE_GAME' as any
+    };
+
     if (localTeam && visitorTeam) {
        [...localTeam.activePlayers, ...visitorTeam.activePlayers].forEach(p => {
          playerStats[p.id] = { points: 0, fouls: 0, tecnicas: 0, antideportivas: 0, descalificante: false, expulsion: false };
@@ -125,33 +132,34 @@ export default function ControlCenter() {
        Object.values(allPlayersMap).forEach(p => {
           if(!playerStats[p.id]) playerStats[p.id] = { points: 0, fouls: 0, tecnicas: 0, antideportivas: 0, descalificante: false, expulsion: false };
        });
+       
+       projection = buildMatchProjection(events, localTeam.id, visitorTeam.id);
+       localScore = projection.homeScore;
+       visitorScore = projection.awayScore;
+       localFouls = projection.homeFouls;
+       visitorFouls = projection.awayFouls;
     }
 
     events.forEach(ev => {
       const action = ACTIONS.find(a => a.id === ev.type);
       if (!action) return;
       
-      const isLocalPlayer = localTeam?.activePlayers.find(p => p.id === ev.primaryPlayerId);
-      const isLocal = isLocalPlayer ? 'local' : (ev.teamId === 'local' ? 'local' : 'visitor');
+      const isLocal = ev.uiTeamId;
       
       if (action.type === 'points') {
-        if (isLocal === 'local') localScore += action.value;
-        if (isLocal === 'visitor') visitorScore += action.value;
-        if (playerStats[ev.primaryPlayerId]) playerStats[ev.primaryPlayerId].points += action.value;
+        if (playerStats[ev.primaryPlayerId!]) playerStats[ev.primaryPlayerId!].points += action.value;
       } else if (action.type === 'foul') {
-        if (isLocal === 'local') localFouls += action.value;
-        if (isLocal === 'visitor') visitorFouls += action.value;
-        if (playerStats[ev.primaryPlayerId]) {
-          playerStats[ev.primaryPlayerId].fouls += action.value;
-          if (action.id === 'foul_tecnica') playerStats[ev.primaryPlayerId].tecnicas++;
-          if (action.id === 'foul_antideportiva') playerStats[ev.primaryPlayerId].antideportivas++;
-          if (action.id === 'foul_descalificante') playerStats[ev.primaryPlayerId].descalificante = true;
-          if (action.id === 'foul_expulsion') playerStats[ev.primaryPlayerId].expulsion = true;
+        if (playerStats[ev.primaryPlayerId!]) {
+          playerStats[ev.primaryPlayerId!].fouls += action.value;
+          if (action.id === 'foul_tecnica') playerStats[ev.primaryPlayerId!].tecnicas++;
+          if (action.id === 'foul_antideportiva') playerStats[ev.primaryPlayerId!].antideportivas++;
+          if (action.id === 'foul_descalificante') playerStats[ev.primaryPlayerId!].descalificante = true;
+          if (action.id === 'foul_expulsion') playerStats[ev.primaryPlayerId!].expulsion = true;
         }
       }
     });
 
-    return { localScore, visitorScore, localFouls, visitorFouls, playerStats };
+    return { localScore, visitorScore, localFouls, visitorFouls, playerStats, projection };
   }, [events, localTeam, visitorTeam, allPlayersMap]);
 
   // --- HANDLERS ---
@@ -192,22 +200,51 @@ export default function ControlCenter() {
   const addEvent = async (action: typeof ACTIONS[0], playerId: number, teamId: 'local' | 'visitor') => {
     setSelection({ type: 'none' }); // Reset immediately for UX speed
     setFoulMode(false);
+    
+    // Only allow if period is IN_PROGRESS
+    if (stats.projection.periodState !== 'IN_PROGRESS') {
+       alert("Solo puedes registrar eventos durante un período en curso.");
+       return;
+    }
+
     try {
+       const dbTeamId = teamId === 'local' ? localTeam?.id : visitorTeam?.id;
        const res = await fetch(`/api/admin/matches/${id}/events`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
              type: action.id,
+             teamId: dbTeamId,
+             clock: "10:00", // Default for now
              primaryPlayerId: playerId,
           })
        });
        const newEvent = await res.json();
-       newEvent.teamId = teamId;
+       newEvent.uiTeamId = teamId;
        newEvent.actionId = action.id;
        
        setEvents(prev => [newEvent, ...prev]);
     } catch(e) {
        console.error("Failed to add event");
+    }
+  };
+
+  const addPeriodEvent = async (type: string, nextPeriod?: string) => {
+    try {
+       const res = await fetch(`/api/admin/matches/${id}/events`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+             type: type,
+             period: nextPeriod || stats.projection.currentPeriod,
+             clock: "10:00"
+          })
+       });
+       const newEvent = await res.json();
+       newEvent.actionId = type;
+       setEvents(prev => [newEvent, ...prev]);
+    } catch(e) {
+       console.error("Failed to add period event");
     }
   };
 
@@ -274,44 +311,62 @@ export default function ControlCenter() {
     <div className="min-h-screen bg-[#020617] text-white flex flex-col font-sans overflow-hidden">
       
       {/* Top Scoreboard Bar */}
-      <header className="h-24 bg-[#050B18] border-b border-white/5 flex items-center justify-between px-8 shrink-0">
+      <header className="h-24 bg-[#050B18] border-b border-white/5 flex items-center justify-between px-8 shrink-0 relative z-20">
         <div className="flex items-center gap-4">
           <button onClick={() => navigate('/mesa')} className="p-3 rounded-full bg-white/5 hover:bg-white/10 transition-colors text-white/50 hover:text-white">
             <ChevronLeft className="w-6 h-6" />
           </button>
           <div className="flex flex-col">
             <span className={`text-3xl font-black tracking-tighter ${localTeam.textColor}`}>{localTeam.short}</span>
-            <span className="text-xs text-white/40 uppercase tracking-widest font-bold">Faltas: {stats.localFouls}</span>
+            <div className={`text-xs uppercase tracking-widest font-bold px-2 py-0.5 rounded inline-block w-fit ${stats.localFouls >= 5 ? 'bg-red-600 text-white animate-pulse' : 'text-white/40'}`}>
+              Faltas: {stats.localFouls}
+            </div>
           </div>
         </div>
 
         <div className="flex flex-col items-center justify-center">
           <div className="flex items-center gap-8">
             <span className="text-6xl font-black tracking-tighter tabular-nums w-24 text-right">{stats.localScore}</span>
-            <div className="flex flex-col items-center justify-center px-6 py-2 bg-white/5 rounded-2xl border border-white/10">
+            <div className="flex flex-col items-center justify-center px-6 py-2 bg-white/5 rounded-2xl border border-white/10 min-w-[120px]">
               <span className="text-red-500 font-mono text-3xl font-bold tracking-widest">10:00</span>
-              <span className="text-xs text-white/40 uppercase font-bold tracking-widest">Q1</span>
+              <span className="text-xs text-white/40 uppercase font-bold tracking-widest">{stats.projection.currentPeriod || '---'}</span>
             </div>
             <span className="text-6xl font-black tracking-tighter tabular-nums w-24 text-left">{stats.visitorScore}</span>
           </div>
         </div>
 
         <div className="flex items-center gap-4 text-right">
-          <div className="flex flex-col">
+          <div className="flex flex-col items-end">
             <span className={`text-3xl font-black tracking-tighter ${visitorTeam.textColor}`}>{visitorTeam.short}</span>
-            <span className="text-xs text-white/40 uppercase tracking-widest font-bold">Faltas: {stats.visitorFouls}</span>
+            <div className={`text-xs uppercase tracking-widest font-bold px-2 py-0.5 rounded inline-block w-fit ${stats.visitorFouls >= 5 ? 'bg-red-600 text-white animate-pulse' : 'text-white/40'}`}>
+              Faltas: {stats.visitorFouls}
+            </div>
           </div>
-          <button 
-            onClick={async () => {
-              if(confirm('¿Seguro que quieres finalizar este partido?')) {
-                await fetch(`/api/admin/matches/${id}/finish`, { method: 'POST' });
-                navigate(`/mesa/${id}/acta`);
-              }
-            }}
-            className="ml-4 px-4 py-2 bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white border border-red-500/30 rounded-xl text-sm font-bold transition-colors cursor-pointer"
-          >
-            Finalizar
-          </button>
+          {getNextPeriodAction(stats.projection) && (
+            <button 
+              onClick={() => {
+                 const pAction = getNextPeriodAction(stats.projection)!;
+                 addPeriodEvent(pAction.action, pAction.nextPeriod);
+              }}
+              className="ml-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500/30 rounded-xl text-sm font-bold transition-colors cursor-pointer flex items-center gap-2"
+            >
+              <Play className="w-4 h-4" />
+              {getNextPeriodAction(stats.projection)?.label}
+            </button>
+          )}
+          {stats.projection.periodState === 'FINISHED' && (
+            <button 
+              onClick={async () => {
+                if(confirm('¿Seguro que quieres oficializar este partido?')) {
+                  await fetch(`/api/admin/matches/${id}/finish`, { method: 'POST' });
+                  navigate(`/mesa/${id}/acta`);
+                }
+              }}
+              className="ml-4 px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-500 hover:text-white border border-emerald-500/30 rounded-xl text-sm font-bold transition-colors cursor-pointer"
+            >
+              Oficializar
+            </button>
+          )}
         </div>
       </header>
 
@@ -328,7 +383,22 @@ export default function ControlCenter() {
         </div>
 
         {/* Action Pad Column */}
-        <div className="flex-1 flex flex-col items-center justify-center">
+        <div className="flex-1 flex flex-col items-center justify-center relative">
+          
+          {stats.projection.periodState !== 'IN_PROGRESS' && (
+             <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#020617]/80 backdrop-blur-sm rounded-3xl border border-white/5">
+                <Clock className="w-12 h-12 text-white/20 mb-4" />
+                <span className="text-xl font-bold text-white/60">
+                   {stats.projection.periodState === 'PRE_GAME' ? 'Esperando inicio del partido' : 
+                    stats.projection.periodState === 'FINISHED' ? 'Partido finalizado' :
+                    'Entre cuartos'}
+                </span>
+                <span className="text-sm text-white/40 mt-2">
+                   {stats.projection.periodState === 'FINISHED' ? 'Debes oficializar el acta' : 'Inicia el período para registrar eventos'}
+                </span>
+             </div>
+          )}
+
           <div className="text-center mb-8 h-12">
             {selection.type === 'none' && (
               <span className="text-white/40 font-medium">Selecciona Jugador o Acción</span>
@@ -410,9 +480,32 @@ export default function ControlCenter() {
           )}
           <AnimatePresence initial={false}>
             {events.map((ev) => {
-              const isLocal = ev.teamId === 'local';
+              if (ev.type === 'PERIOD_START' || ev.type === 'PERIOD_END') {
+                 return (
+                    <motion.div
+                      key={ev.id}
+                      initial={{ opacity: 0, scale: 0.8, x: -20 }}
+                      animate={{ opacity: 1, scale: 1, x: 0 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
+                      className="shrink-0 flex items-center bg-blue-900/20 border border-blue-500/30 rounded-2xl px-4 py-2 gap-4 h-14"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-xs font-bold text-blue-400 uppercase tracking-widest">{ev.type === 'PERIOD_START' ? 'Inicio' : 'Fin'} de Período</span>
+                        <span className="font-black text-white">{ev.period || '---'}</span>
+                      </div>
+                      <button 
+                        onClick={() => deleteEvent(ev.id)}
+                        className="w-8 h-8 rounded-full hover:bg-red-500/20 text-white/20 hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </motion.div>
+                 );
+              }
+
+              const isLocal = ev.uiTeamId === 'local';
               const team = isLocal ? localTeam : visitorTeam;
-              const player = allPlayersMap[ev.primaryPlayerId];
+              const player = ev.primaryPlayerId ? allPlayersMap[ev.primaryPlayerId] : null;
               const action = ACTIONS.find(a => a.id === ev.actionId);
               
               if (!team || !player || !action) return null;

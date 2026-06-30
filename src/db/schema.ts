@@ -38,12 +38,24 @@ export const players = pgTable('players', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+export const matchdays = pgTable('matchdays', {
+  id: serial('id').primaryKey(),
+  seasonId: integer('season_id').references(() => seasons.id).notNull(),
+  name: text('name').notNull(), // e.g. "Jornada 1", "Fecha 2"
+  startDate: timestamp('start_date'),
+  endDate: timestamp('end_date'),
+  status: text('status').notNull().default('DRAFT'), // DRAFT, ACTIVE, FINISHED
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 export const matches = pgTable('matches', {
   id: serial('id').primaryKey(),
   seasonId: integer('season_id').references(() => seasons.id).notNull(),
+  matchdayId: integer('matchday_id').references(() => matchdays.id),
   homeTeamId: integer('home_team_id').references(() => teams.id).notNull(),
   awayTeamId: integer('away_team_id').references(() => teams.id).notNull(),
-  status: text('status').notNull().default('SCHEDULED'), // SCHEDULED, PREPARING, READY_FOR_DESK, IN_PROGRESS, FINISHED, PUBLISHED
+  status: text('status').notNull().default('SCHEDULED'), // SCHEDULED, READY_FOR_DESK, IN_PROGRESS, HALFTIME, INTERMISSION, FINISHED, OFFICIALIZED, PUBLISHED, SUSPENDED, WALKOVER
+
   scheduledDate: timestamp('scheduled_date'),
   location: text('location'),
   refereeReport: text('referee_report'),
@@ -65,6 +77,7 @@ export const matchRosters = pgTable('match_rosters', {
 export const matchEvents = pgTable('match_events', {
   id: serial('id').primaryKey(),
   matchId: integer('match_id').references(() => matches.id).notNull(),
+  teamId: integer('team_id').references(() => teams.id),
   type: text('type').notNull(),
   period: text('period'),
   clock: text('clock'),

@@ -39,56 +39,102 @@ async function startServer() {
       const activeSeasons = await db.select().from(seasons).where(eq(seasons.leagueId, league.id)).limit(1);
       const allTeams = await db.select().from(teams);
 
-      // Find a match to prepare
-      const { matches, players, matchRosters, matchEvents } = await import('./src/db/schema');
-      const { or, isNull } = await import('drizzle-orm');
-      let activeMatch = await db.select().from(matches).where(or(eq(matches.status, 'SCHEDULED'), eq(matches.status, 'PREPARING'), eq(matches.status, 'IN_PROGRESS'))).limit(1);
-      
-      let matchId = null;
-      if (activeMatch.length > 0) {
-        matchId = activeMatch[0].id;
-      } else if (allTeams.length >= 2 && activeSeasons.length > 0) {
-        // Create a dummy match if none exists
-        const [home, away] = allTeams;
-        
-        // Ensure teams have players
-        const homePlayers = await db.select().from(players).where(eq(players.teamId, home.id));
-        if (homePlayers.length === 0) {
-          const newPlayers = [];
-          for(let i=1; i<=8; i++) newPlayers.push({ teamId: home.id, firstName: 'Local', lastName: 'Jugador ' + i, jerseyNumber: i+3 });
-          await db.insert(players).values(newPlayers);
-        }
-        const awayPlayers = await db.select().from(players).where(eq(players.teamId, away.id));
-        if (awayPlayers.length === 0) {
-          const newPlayers = [];
-          for(let i=1; i<=8; i++) newPlayers.push({ teamId: away.id, firstName: 'Visitante', lastName: 'Jugador ' + i, jerseyNumber: i+3 });
-          await db.insert(players).values(newPlayers);
-        }
-
-        const [newMatch] = await db.insert(matches).values({
-          seasonId: activeSeasons[0].id,
-          homeTeamId: home.id,
-          awayTeamId: away.id,
-          status: 'SCHEDULED',
-          scheduledDate: new Date(),
-          location: 'Gimnasio Municipal'
-        }).returning();
-        matchId = newMatch.id;
-      }
-
       res.json({
         leagueName: league.name,
         activeSeason: activeSeasons.length > 0 ? activeSeasons[0].name : 'Sin temporada',
-        teamsCount: allTeams.length,
-        todayMatchId: matchId,
-        homeTeamName: allTeams[0]?.name,
-        awayTeamName: allTeams[1]?.name,
+        activeSeasonId: activeSeasons.length > 0 ? activeSeasons[0].id : null,
+        teamsCount: allTeams.length
       });
     } catch (error) {
       console.error("Dashboard data fetch failed:", error);
       res.status(500).json({ error: "Failed to fetch dashboard data" });
     }
   });
+
+  app.get("/api/admin/teams", async (req, res) => {
+    try {
+      const { teams } = await import('./src/db/schema');
+      const allTeams = await db.select().from(teams);
+      res.json(allTeams);
+    } catch (error) {
+      console.error("Teams fetch failed:", error);
+      res.status(500).json({ error: "Failed to fetch teams" });
+    }
+  });
+
+  app.get("/api/admin/seasons/:id/matchdays", async (req, res) => {
+    try {
+      const { matchdays, matches, teams } = await import('./src/db/schema');
+      const { eq, desc } = await import('drizzle-orm');
+      
+      const mdList = await db.select().from(matchdays)
+        .where(eq(matchdays.seasonId, parseInt(req.params.id)))
+        .orderBy(desc(matchdays.id));
+        
+      const mdWithMatches = [];
+      for (const md of mdList) {
+        const matchesList = await db.select().from(matches).where(eq(matches.matchdayId, md.id));
+        // We also want to fetch team names
+        const matchesWithTeams = [];
+        for (const m of matchesList) {
+           const [home] = await db.select().from(teams).where(eq(teams.id, m.homeTeamId));
+           const [away] = await db.select().from(teams).where(eq(teams.id, m.awayTeamId));
+           matchesWithTeams.push({
+             ...m,
+             homeTeam: home,
+             awayTeam: away
+           });
+        }
+        mdWithMatches.push({ ...md, matches: matchesWithTeams });
+      }
+      
+      res.json(mdWithMatches);
+    } catch (error) {
+      console.error("Matchdays fetch failed:", error);
+      res.status(500).json({ error: "Failed to fetch matchdays" });
+    }
+  });
+
+  app.post("/api/admin/seasons/:id/matchdays", async (req, res) => {
+    try {
+      const { matchdays } = await import('./src/db/schema');
+      const { name, startDate, endDate } = req.body;
+      
+      const [newMd] = await db.insert(matchdays).values({
+        seasonId: parseInt(req.params.id),
+        name: name,
+        startDate: startDate ? new Date(startDate) : null,
+        endDate: endDate ? new Date(endDate) : null,
+        status: 'DRAFT'
+      }).returning();
+      
+      res.json(newMd);
+    } catch (error) {
+      console.error("Matchday creation failed:", error);
+      res.status(500).json({ error: "Failed to create matchday" });
+    }
+  });
+  
+  app.post("/api/admin/matchdays/:id/matches", async (req, res) => {
+    try {
+      const { matches } = await import('./src/db/schema');
+      const { homeTeamId, awayTeamId, seasonId } = req.body;
+      
+      const [newMatch] = await db.insert(matches).values({
+        matchdayId: parseInt(req.params.id),
+        seasonId: seasonId,
+        homeTeamId: homeTeamId,
+        awayTeamId: awayTeamId,
+        status: 'SCHEDULED'
+      }).returning();
+      
+      res.json(newMatch);
+    } catch (error) {
+      console.error("Match creation failed:", error);
+      res.status(500).json({ error: "Failed to create match" });
+    }
+  });
+
 
   app.get("/api/admin/matches/:id/data", async (req, res) => {
     try {
@@ -206,11 +252,14 @@ async function startServer() {
       const { matchEvents, matches } = await import('./src/db/schema');
       const { eq } = await import('drizzle-orm');
       const matchId = parseInt(req.params.id);
-      const { type, primaryPlayerId, secondaryPlayerId, payload } = req.body;
+      const { type, teamId, period, clock, primaryPlayerId, secondaryPlayerId, payload } = req.body;
       
       const [newEvent] = await db.insert(matchEvents).values({
         matchId,
+        teamId,
         type,
+        period,
+        clock,
         primaryPlayerId,
         secondaryPlayerId,
         payload
